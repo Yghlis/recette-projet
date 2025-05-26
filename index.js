@@ -1,4 +1,3 @@
-// index.js
 require('dotenv').config();
 const express  = require('express');
 const Airtable = require('airtable');
@@ -19,7 +18,7 @@ const LINK_TO_INGREDIENT = 'Ingredient';
 app.use(cors());
 app.use(express.json());
 
-// Helper : ne conserve que les champs non vides pour éviter le 422 d’Airtable
+
 function pickNonEmpty(obj) {
   const out = {};
   for (const [k, v] of Object.entries(obj)) {
@@ -52,8 +51,7 @@ async function convertIngredientsDetails(arr = []) {
 }
 
 /**
- * Calcule macros + vitamines + minéraux pour une recette.
- * @param {string[]} recipeItemIds — IDs Airtable de Recipe Items
+ * @param {string[]} recipeItemIds 
  * @return {Promise<{
 *   CaloriesTotal: number,
 *   ProteinesTotal: number,
@@ -74,14 +72,13 @@ async function computeNutrition(recipeItemIds) {
 
   for (const jr of items) {
     const rawQty = jr.fields.Quantity || 0;
-    const unit   = jr.fields.Unit;       // 'kg','g','L','mL','cuillere','pince'
+    const unit   = jr.fields.Unit;      
     const ingrId = jr.fields.Ingredient?.[0];
     if (!ingrId) continue;
 
     const recI = await base(T_INGREDIENTS).find(ingrId);
     const f    = recI.fields;
 
-    // 1) conversion en grammes ou millilitres de référence
     let qtyRef;
     switch (unit) {
       case 'kg':       qtyRef = rawQty * 1000; break;
@@ -97,14 +94,11 @@ async function computeNutrition(recipeItemIds) {
       default:         qtyRef = rawQty;        break;
     }
     
-
-    // 2) macros pondérées
     sum.Calories  += (f.Calories  || 0) * (qtyRef / 100);
     sum.Proteines += (f.Proteines || 0) * (qtyRef / 100);
     sum.Glucides  += (f.Glucides  || 0) * (qtyRef / 100);
     sum.Lipides   += (f.Lipides   || 0) * (qtyRef / 100);
 
-    // 3) vitamines & minéraux
     if (f.Vitamines) {
       f.Vitamines.split(',').map(s=>s.trim()).filter(Boolean).forEach(v=>vitSet.add(v));
     }
@@ -123,8 +117,6 @@ async function computeNutrition(recipeItemIds) {
   };
 }
 
-
-// GET all recipes
 app.get('/api/recettes', (req, res) => {
   const out = [];
   base(T_RECIPES)
@@ -145,7 +137,6 @@ app.get('/api/recettes', (req, res) => {
     );
 });
 
-// GET one recipe + its ingredients
 app.get('/api/recettes/:id', async (req, res) => {
   try {
     const recipe = await base(T_RECIPES).find(req.params.id);
@@ -178,7 +169,6 @@ app.get('/api/recettes/:id', async (req, res) => {
   }
 });
 
-// CREATE recipe
 app.post('/api/recettes', async (req, res) => {
   let recipeId;
   try {
@@ -187,7 +177,6 @@ app.post('/api/recettes', async (req, res) => {
       return res.status(400).json({ error: 'Aucun ingrédient.' });
     }
 
-    // unicité du nom
     const dup = await base(T_RECIPES)
       .select({
         filterByFormula: `LOWER({Name}) = LOWER("${fields.Name}")`,
@@ -198,11 +187,9 @@ app.post('/api/recettes', async (req, res) => {
       return res.status(400).json({ error: 'Nom déjà utilisé.' });
     }
 
-    // création de la recette
     const [created] = await base(T_RECIPES).create([{ fields }]);
     recipeId = created.id;
 
-    // création des Recipe Items
     const formatted = await convertIngredientsDetails(IngredientsDetails);
     const joinIds = await Promise.all(formatted.map(async d => {
       const [jr] = await base(T_RECIPE_ITEMS).create([{
@@ -216,14 +203,10 @@ app.post('/api/recettes', async (req, res) => {
       return jr.id;
     }));
 
-    // lier les items à la recette
     await base(T_RECIPES).update(recipeId, { 'Recipe Items': joinIds });
 
-    // 2) on calcule et on met à jour nutrition
     const nutrition = await computeNutrition(joinIds);
     await base(T_RECIPES).update(recipeId, nutrition);
-    
-    // 3) on refetch la recette complète avec les totaux
     const full = await base(T_RECIPES).find(recipeId);
     res.json({ id: full.id, ...full.fields });
   } catch (e) {
@@ -234,18 +217,17 @@ app.post('/api/recettes', async (req, res) => {
   }
 });
 
-// UPDATE recipe
+
 app.put('/api/recettes/:id', async (req, res) => {
   try {
     const { IngredientsDetails = [], ...body } = req.body;
-    delete body.id; // remove id before update
+    delete body.id; 
     const id = req.params.id;
 
     if (!IngredientsDetails.length) {
       return res.status(400).json({ error: 'Aucun ingrédient.' });
     }
 
-    // unicité du nom si modifié
     if (body.Name) {
       const dup = await base(T_RECIPES)
         .select({
@@ -261,17 +243,13 @@ app.put('/api/recettes/:id', async (req, res) => {
       }
     }
 
-    // mise à jour des champs
     await base(T_RECIPES).update(id, body);
-
-    // suppression en masse des anciens Recipe Items
     const recipeRec = await base(T_RECIPES).find(id);
     const oldJoinIds = recipeRec.fields['Recipe Items'] || [];
     if (oldJoinIds.length) {
       await base(T_RECIPE_ITEMS).destroy(oldJoinIds);
     }
 
-    // recréation des nouveaux Recipe Items
     const formatted = await convertIngredientsDetails(IngredientsDetails);
     const joinIds = await Promise.all(formatted.map(async d => {
       const [jr] = await base(T_RECIPE_ITEMS).create([{
@@ -285,14 +263,10 @@ app.put('/api/recettes/:id', async (req, res) => {
       return jr.id;
     }));
 
-    // 1) mise à jour du lien Recipe Items
-await base(T_RECIPES).update(id, { 'Recipe Items': joinIds });
 
-// 2) calcul + mise à jour nutrition
+await base(T_RECIPES).update(id, { 'Recipe Items': joinIds });
 const nutrition = await computeNutrition(joinIds);
 await base(T_RECIPES).update(id, nutrition);
-
-// 3) refetch et réponse
 const full = await base(T_RECIPES).find(id);
 res.json({ id: full.id, ...full.fields });
 
@@ -301,32 +275,35 @@ res.json({ id: full.id, ...full.fields });
     res.status(500).json({ error: e.message });
   }
 });
-
-// DELETE recipe (with removal of linked Recipe Items)
 app.delete('/api/recettes/:id', async (req, res) => {
   try {
-    const id = req.params.id;
-    // 1) fetch linked Recipe Items
-    const items = await base(T_RECIPE_ITEMS)
-      .select({ filterByFormula: `{${LINK_TO_RECIPE}} = "${id}"` })
+    const recipeId = req.params.id;
+    const allItems = await base(T_RECIPE_ITEMS)
+      .select({ fields: ['Recipe'] })
       .all();
-    // 2) delete them
-    await Promise.all(items.map(item => base(T_RECIPE_ITEMS).destroy(item.id)));
-    // 3) delete la recette
-    await base(T_RECIPES).destroy(id);
-    res.json({ message: 'Recette et ses éléments supprimés', id });
+    const linkedItems = allItems.filter(item =>
+      Array.isArray(item.fields.Recipe) &&
+      item.fields.Recipe.includes(recipeId)
+    );
+    const itemIds = linkedItems.map(item => item.id);
+    while (itemIds.length) {
+      const batch = itemIds.splice(0, 10);
+      await base(T_RECIPE_ITEMS).destroy(batch);
+    }
+    await base(T_RECIPES).destroy([recipeId]);
+
+    res.json({ message: 'Recette et tous ses Recipe Items supprimés', id: recipeId });
   } catch (err) {
-    console.error(err);
+    console.error('Erreur DELETE /api/recettes/:id :', err);
     res.status(500).json({ error: err.message });
   }
 });
 
-// — CRUD ingrédients — //
+
 app.get('/api/ingredients', (req, res) => {
   const out = [];
   base(T_INGREDIENTS)
     .select({
-      // expose désormais aussi les champs nutritionnels
       fields: [
         'Name',
         'Calories',
@@ -335,7 +312,7 @@ app.get('/api/ingredients', (req, res) => {
         'Lipides',
         'Vitamines',
         'Mineraux',
-        'Recipe Items'    // pour la vérification de suppression
+        'Recipe Items'  
       ]
     })
     .eachPage(
@@ -347,8 +324,6 @@ app.get('/api/ingredients', (req, res) => {
     );
 });
 
-// — GET nutrition via IA pour un ingrédient donné —
-// GET nutrition via IA pour un ingrédient donné (avec détection solide/liquide)
 app.get('/api/ingredients/nutrition', async (req, res) => {
   const { name } = req.query;
   if (!name) {
@@ -358,8 +333,6 @@ app.get('/api/ingredients/nutrition', async (req, res) => {
   try {
     const OpenAI = require('openai');
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-
-    // Nouveau prompt : on demande aussi l’unité de référence (g ou mL)
     const prompt = `Pour l’aliment "${name}", décide s’il s’agit d’un solide ou d’un liquide.
 - Si c’est un solide, donne les apports pour 100 g.
 - Si c’est un liquide, donne-les pour 100 mL.
@@ -381,14 +354,11 @@ Rends un JSON strict avec ces clés :
 
     const text = completion.choices[0].message.content.trim();
     const data = JSON.parse(text);
-
-    // Helper pour format texte
     const fmtList = obj =>
       typeof obj === 'object'
         ? Object.entries(obj).map(([k, v]) => `${k}: ${v}`).join(', ')
         : (obj || '');
 
-    // On renvoie aussi l’unité décidée par l’IA
     return res.json({
       Unit:      data.Unit      || 'g',
       Calories:  data.Calories   ?? 0,
@@ -421,8 +391,6 @@ app.get('/api/ingredients/:id', (req, res) => {
       Unit,  
       'Recipe Items': linkedItems = []
     } = rec.fields;
-
-    // Même formatage pour les données qui venaient de l'IA plus tôt :
     const fmtList = obj =>
       typeof obj === 'object'
         ? Object.entries(obj)
@@ -447,12 +415,10 @@ app.get('/api/ingredients/:id', (req, res) => {
 
 app.post('/api/ingredients', async (req, res) => {
   try {
-    // Clone et normalisation
     const body = { ...req.body };
     if (!body.Name) {
       return res.status(400).json({ error: 'Name requis.' });
     }
-    // Si l’utilisateur a envoyé un tableau, on le reformate
     if (Array.isArray(body.Vitamines)) {
       body.Vitamines = body.Vitamines.join(', ');
     }
@@ -479,12 +445,12 @@ app.post('/api/ingredients', async (req, res) => {
 
 app.put('/api/ingredients/:id', async (req, res) => {
   try {
-    // 1) Clone et suppression des clés non-Airtable
+
     const body = { ...req.body };
     delete body.id;
     delete body.linkedItems;
 
-    // 2) Normalisation des tableaux
+
     if (Array.isArray(body.Vitamines)) {
       body.Vitamines = body.Vitamines.join(', ');
     }
@@ -492,7 +458,6 @@ app.put('/api/ingredients/:id', async (req, res) => {
       body.Mineraux = body.Mineraux.join(', ');
     }
 
-    // 3) Unicité du nom si changé
     if (body.Name) {
       const dup = await base(T_INGREDIENTS)
         .select({
@@ -508,7 +473,7 @@ app.put('/api/ingredients/:id', async (req, res) => {
       }
     }
 
-    // 4) Mise à jour Airtable
+
     const updatedBody = pickNonEmpty(body);
     const updated     = await base(T_INGREDIENTS).update(req.params.id, updatedBody);
     res.json({ id: updated.id, ...updated.fields });
@@ -518,24 +483,14 @@ app.put('/api/ingredients/:id', async (req, res) => {
   }
 });
 
-// DELETE ingredient – refuse si le moindre Recipe Item le référence
-
-
-
-// DELETE ingredient – refuse s'il reste au moins un Recipe Item relié à une recette
-// DELETE ingredient – refuse si l’ingrédient est encore utilisé dans une recette
 app.delete('/api/ingredients/:id', async (req, res) => {
   try {
     const id = req.params.id;
-
-    // 1) Récupère **tous** les Recipe Items (on peut paginer si vous en avez des milliers)
     const allItems = await base(T_RECIPE_ITEMS)
       .select({
         fields: ['Ingredient', 'Recipe']
       })
       .all();
-
-    // 2) Filtre ceux qui référencent encore cet ingrédient **et** qui sont liés à une recette
     const stillUsed = allItems.filter(item => {
       const ingrListe = item.fields.Ingredient || [];
       const recipeLien = item.fields.Recipe || [];
@@ -548,8 +503,6 @@ app.delete('/api/ingredients/:id', async (req, res) => {
           "Impossible de supprimer cet ingrédient : il est encore utilisé dans au moins une recette."
       });
     }
-
-    // 3) Aucun Recipe Item ne le référence → suppression autorisée
     await base(T_INGREDIENTS).destroy(id);
     return res.json({ message: "Ingrédient supprimé", id });
   } catch (err) {
@@ -558,24 +511,12 @@ app.delete('/api/ingredients/:id', async (req, res) => {
   }
 });
 
-
-
-
-
-
-
-// ---------------------------------------------------------------------------
-//  POST /api/recettes/generate   – version incluant l’unité "piece"
-// ---------------------------------------------------------------------------
 app.post('/api/recettes/generate', async (req, res) => {
   try {
-    /* ---------- 1. Vérifier le prompt ---------- */
     const { prompt } = req.body || {};
     if (!prompt?.trim()) {
       return res.status(400).json({ error: 'Prompt manquant.' });
     }
-
-    /* ---------- 2. Appel OpenAI ---------- */
     const OpenAI = require('openai');
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
@@ -607,25 +548,18 @@ Ne renvoie QUE le JSON, aucun commentaire.`;
     });
 
     let data = JSON.parse(chat.choices[0].message.content.trim());
-
-    /* ---------- 3. Sécuriser DishType ---------- */
     const allowedDish = ['Entrée', 'Plat', 'Dessert', 'Autre'];
     if (!allowedDish.includes(data.DishType)) data.DishType = 'Autre';
-
-    /* ---------- 4. Boucle sur les ingrédients ---------- */
     const allowedUnit = ['g', 'kg', 'mL', 'L', 'cuillere', 'pince', 'piece'];
 
     for (const det of data.IngredientsDetails) {
-      /* 4-a. Normaliser l’unité */
       const unitFix = det.Unite?.toLowerCase();
       det.Unite = allowedUnit.find(u => u.toLowerCase() === unitFix) || 'g';
-
-      /* 4-b. Recherche souple dans Airtable (singulier/pluriel) */
       const rawName    = det.Nom.trim();
       const baseSearch = rawName
         .toLowerCase()
-        .replace(/\bes$/, '')   // pommes → pomme
-        .replace(/s$/,  '');    // patates → patate
+        .replace(/\bes$/, '')   
+        .replace(/s$/,  '');  
 
       const found = await base(T_INGREDIENTS)
         .select({
@@ -637,10 +571,8 @@ Ne renvoie QUE le JSON, aucun commentaire.`;
 
       let ingrId;
       if (found.length) {
-        /* ingrédient existant */
         ingrId = found[0].id;
       } else {
-        /* 4-c. Création + nutrition automatique */
         const [created] = await base(T_INGREDIENTS)
           .create([{ fields: { Name: rawName } }]);
         ingrId = created.id;
@@ -666,12 +598,8 @@ Ne renvoie QUE le JSON, aucun commentaire.`;
           console.warn(`Nutrition IA échouée pour ${rawName}:`, err.message);
         }
       }
-
-      /* 4-d. Remplacer Nom par l’ID (compatible convertIngredientsDetails) */
       det.Nom = ingrId;
     }
-
-    /* ---------- 5. Réponse ---------- */
     res.json(data);
 
   } catch (e) {
@@ -680,6 +608,61 @@ Ne renvoie QUE le JSON, aucun commentaire.`;
   }
 });
 
+app.get('/api/recherche', async (req, res) => {
+  try {
+    const { q = '', type } = req.query;
+    const txt = q.trim().toLowerCase().replace(/"/g, '\\"');
+    const recByName = txt
+      ? await base(T_RECIPES)
+          .select({
+            filterByFormula: `FIND("${txt}", LOWER({Name}))>0`,
+            maxRecords: 10,
+            fields: ['Name','DishType']
+          })
+          .firstPage()
+      : [];
+    let recByIng = [];
+    if (txt) {
+      const items = await base(T_RECIPE_ITEMS)
+        .select({
+          filterByFormula: `FIND("${txt}", LOWER({IngredientName}))>0`,
+          fields: ['Recipe']
+        })
+        .all();
+      const ids = Array.from(new Set(items
+        .flatMap(it => it.fields.Recipe || [])));
+      if (ids.length) {
+        const idClauses = ids
+          .slice(0, 10)
+          .map(id => `RECORD_ID()="${id}"`)
+          .join(',');
+        recByIng = await base(T_RECIPES)
+          .select({
+            filterByFormula: `OR(${idClauses})`,
+            fields: ['Name','DishType']
+          })
+          .firstPage();
+      }
+    }
+    const all = [...recByName, ...recByIng];
+    const seen = new Set();
+    let merged = [];
+    for (const r of all) {
+      if (!seen.has(r.id)) {
+        seen.add(r.id);
+        merged.push({ id: r.id, ...r.fields });
+      }
+      if (merged.length >= 10) break;
+    }
+    if (type && ['Entrée','Plat','Dessert','Autre'].includes(type)) {
+      merged = merged.filter(r => r.DishType === type);
+    }
 
+    res.json(merged);
+  } catch (err) {
+    console.error('Erreur recherche :', err);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 app.listen(port, () => console.log(`API fqsête sur ${port}`));
